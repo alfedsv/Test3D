@@ -20,7 +20,7 @@ protocol ViewModelProtocol: AnyObject {
 
 final class ViewModel: ViewModelProtocol {
 
-    var model: SceneModel = SceneModel(externalURL: nil, name: "lola_rumba_dancing", radiusOrbitMul: 1.5, azimuth: .pi / 8, elevation: .pi / 6, scaledCenterMulX: 0, scaledCenterMulY: 0.1, scaledCenterMulZ: 0)
+    var model: SceneModel = SceneModel(externalURL: nil, name: "lola_rumba_dancing", radiusOrbitMul: 2.0, azimuth: .pi / 8, elevation: 0, scaledCenterMulX: 0, scaledCenterMulY: 0.1, scaledCenterMulZ: 0)
 
     var onError: ((String) -> Void)?
     var onUpload: ((URL) -> Void)?
