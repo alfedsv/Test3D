@@ -27,17 +27,14 @@ final class AnimationView: UIView {
     private let cameraEntity = Entity()
     private let modelContainer = Entity()
 
-    /// Пол — тонкий бокс, прямоугольник. Стоит на Y = нижняя точка модели.
     private let floorEntity = ModelEntity()
 
-    /// Направленный свет («солнце»). Позиция не важна — работает только ориентация.
     private let keyLight: DirectionalLight = {
         let light = DirectionalLight()
         light.light.color = .white
         light.light.intensity = 5000
         light.shadow = DirectionalLightComponent.Shadow()
         light.shadow?.maximumDistance = 50
-        // Наклоняем свет сверху-сбоку, чтобы грани модели были видны объёмно.
         light.orientation = simd_quatf(angle: -.pi / 4, axis: [1, 0, 0])
             * simd_quatf(angle: .pi / 6, axis: [0, 1, 0])
         return light
@@ -47,27 +44,31 @@ final class AnimationView: UIView {
 
     // MARK: - State
 
-    private var persistentScale: Float?
     private var hasSetUpCamera = false
     private var transitionToken = UUID()
 
     private var currentSceneModel: SceneModel?
     private var currentScaledCenter = SIMD3<Float>(repeating: 0)
     private var currentScaledRadius: Float = 0
-    /// Y-координата нижней точки модели в мировых координатах — «пол».
     private var currentScaledFloorY: Float = 0
 
     private var cameraAzimuthOffset: Float = 0
-    /// Абсолютный elevation камеры (а не offset). `nil` — берём `scene.elevation`.
     private var cameraElevationAbsolute: Float?
 
-    /// Реальный доступный диапазон elevation с учётом пола.
     private(set) var elevationRange: ClosedRange<Float> = (-.pi / 2)...(.pi / 2)
-    /// Текущий elevation (для инициализации слайдера).
     private(set) var currentElevation: Float = 0
 
-    /// Вызывается каждый раз, когда меняется диапазон (после загрузки модели).
+    var effectiveAzimuth: Float {
+        (currentSceneModel?.azimuth ?? 0) + cameraAzimuthOffset
+    }
+
     var onElevationRangeChanged: ((ClosedRange<Float>, Float) -> Void)?
+
+    // MARK: - Callbacks
+
+    /// Единый канал для всех ошибок (загрузка, кеш, формат и т.д.).
+    /// Всегда вызывается на главном потоке.
+    var onError: ((String) -> Void)?
 
     // MARK: - Init
 
@@ -113,7 +114,6 @@ final class AnimationView: UIView {
 
     private func setupFloor() {
         let mesh = MeshResource.generateBox(size: SIMD3<Float>(1, 0.02, 1))
-        // Непрозрачный нейтральный серый — при ярком свете остаётся отличимым от белого фона.
         let material = SimpleMaterial(
             color: UIColor(white: 0.55, alpha: 1.0),
             roughness: 0.9,
@@ -130,7 +130,6 @@ final class AnimationView: UIView {
         transitionToken = UUID()
         currentModelRoot?.removeFromParent()
         currentModelRoot = nil
-        persistentScale = nil
         hasSetUpCamera = false
         currentSceneModel = nil
         currentScaledCenter = .zero
@@ -145,7 +144,19 @@ final class AnimationView: UIView {
 
     func preload(scenes: [SceneModel], completion: (() -> Void)? = nil) {
         let names = Set(scenes.map(\.name))
-        SceneCache.shared.preload(names: names, completion: completion)
+        SceneCache.shared.preload(names: names) { [weak self] in
+            guard let self = self else { return }
+
+            let missing = names.filter { SceneCache.shared.scene(named: $0) == nil }
+            if !missing.isEmpty {
+                let list = missing.sorted().joined(separator: ", ")
+                self.reportError("""
+                Не удалось загрузить сцены из бандла: \(list).
+                Проверьте, что файлы добавлены в Target → Build Phases → Copy Bundle Resources, и что имена совпадают с именами в коде (без расширения).
+                """)
+            }
+            completion?()
+        }
     }
 
     // MARK: - Play
@@ -155,7 +166,10 @@ final class AnimationView: UIView {
         transitionToken = token
 
         guard let cached = SceneCache.shared.scene(named: exerciseScene.name) else {
-            print("Сцена \(exerciseScene.name) отсутствует в кеше")
+            reportError("""
+            Сцена «\(exerciseScene.name)» отсутствует в кеше.
+            Убедитесь, что она была предзагружена и имя в `SceneModel.name` совпадает с именем файла в бандле (без расширения).
+            """)
             DispatchQueue.main.async { [weak self] in
                 guard let self = self, self.transitionToken == token else { return }
                 completion?()
@@ -165,13 +179,14 @@ final class AnimationView: UIView {
 
         let model = cached.clone(recursive: true)
 
-        if persistentScale == nil {
-            let bounds = model.visualBounds(relativeTo: nil)
-            let height = bounds.max.y - bounds.min.y
-            let desiredHeight: Float = 2.0
-            persistentScale = height > 0 ? desiredHeight / height : 1.0
-        }
-        let scale = persistentScale!
+        // ── Нормализация масштаба ────────────────────────────────
+        // Каждая модель нормализуется до высоты 2.0 независимо от предыдущих.
+        // Это гарантирует, что внешний файл произвольного размера не унаследует
+        // масштаб от бандловой сцены.
+        let initialBounds = model.visualBounds(relativeTo: nil)
+        let initialHeight = initialBounds.max.y - initialBounds.min.y
+        let desiredHeight: Float = 2.0
+        let scale: Float = initialHeight > 0 ? desiredHeight / initialHeight : 1.0
         model.scale = SIMD3<Float>(repeating: scale)
 
         model.isEnabled = false
@@ -186,7 +201,6 @@ final class AnimationView: UIView {
         currentScaledRadius = radius
         currentScaledFloorY = bounds.min.y
 
-        // ── Пол ────────────────────────────────────────────────
         let floorExtent = max(size.x, size.z) * 2.0
         let floorThickness: Float = 0.02
         floorEntity.position = SIMD3<Float>(
@@ -197,7 +211,6 @@ final class AnimationView: UIView {
         floorEntity.scale = SIMD3<Float>(floorExtent, 1, floorExtent)
         floorEntity.isEnabled = true
 
-        // ── Модель ─────────────────────────────────────────────
         currentModelRoot?.removeFromParent()
         modelContainer.addChild(model)
         currentModelRoot = model
@@ -205,7 +218,6 @@ final class AnimationView: UIView {
         model.isEnabled = true
         playAllAnimations(in: model, loop: loop)
 
-        // ── Камера ─────────────────────────────────────────────
         if !hasSetUpCamera {
             hasSetUpCamera = true
         }
@@ -220,14 +232,28 @@ final class AnimationView: UIView {
         }
     }
 
+    // MARK: - Play external
+
     /// Загрузка из внешнего URL (папка на телефоне).
+    /// При ошибке вызывается `onError`, `completion` не срабатывает.
+    /// При успехе — `completion` вызывается сразу после старта анимации.
     func playExternal(
         from url: URL,
         loop: Bool = true,
-        completion: ((Result<Void, Error>) -> Void)? = nil
+        completion: (() -> Void)? = nil
     ) {
         let token = UUID()
         transitionToken = token
+
+        let ext = url.pathExtension.lowercased()
+        let supported: Set<String> = ["usdz", "reality"]
+        guard supported.contains(ext) else {
+            reportError("""
+            Формат «.\(ext)» не поддерживается.
+            RealityKit умеет загружать только .usdz и .reality.
+            """)
+            return
+        }
 
         SceneCache.shared.loadEntity(from: url) { [weak self] result in
             guard let self = self, self.transitionToken == token else { return }
@@ -235,12 +261,24 @@ final class AnimationView: UIView {
             switch result {
             case .success:
                 let name = url.deletingPathExtension().lastPathComponent
-                let scene = SceneModel(externalURL: url, name: name, radiusOrbitMul: 2.0, azimuth: .pi / 8, elevation: 0, scaledCenterMulX: 0, scaledCenterMulY: 0.1, scaledCenterMulZ: 0)
+                let scene = SceneModel(
+                    externalURL: url,
+                    name: name,
+                    radiusOrbitMul: 2.0,
+                    azimuth: .pi / 8,
+                    elevation: 0,
+                    scaledCenterMulX: 0,
+                    scaledCenterMulY: 0.1,
+                    scaledCenterMulZ: 0
+                )
                 self.play(scene: scene, loop: loop) {
-                    completion?(.success(()))
+                    completion?()
                 }
             case .failure(let error):
-                completion?(.failure(error))
+                self.reportError("""
+                Не удалось загрузить файл «\(url.lastPathComponent)».
+                \(error.localizedDescription)
+                """)
             }
         }
     }
@@ -255,10 +293,21 @@ final class AnimationView: UIView {
         }
     }
 
+    // MARK: - Error reporting
+
+    /// Гарантирует, что `onError` будет вызван на главном потоке.
+    private func reportError(_ message: String) {
+        if Thread.isMainThread {
+            onError?(message)
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.onError?(message)
+            }
+        }
+    }
+
     // MARK: - Lighting
 
-    /// Устанавливает интенсивность направленного света (в люксах).
-    /// 0 — свет выключен (остаётся только фоновое IBL).
     func setKeyLightIntensity(_ intensity: Float) {
         keyLight.light.intensity = intensity
     }

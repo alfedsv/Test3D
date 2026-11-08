@@ -17,7 +17,6 @@ final class ViewController: UIViewController {
 
     // MARK: - UI Elements
 
-    /// Тайтл с текущим азимутом камеры в единицах π.
     private let azimuthLabel: UILabel = {
         let label = UILabel()
         label.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
@@ -26,7 +25,6 @@ final class ViewController: UIViewController {
         return label
     }()
 
-    /// Тайтл с текущим наклоном камеры в единицах π.
     private let elevationLabel: UILabel = {
         let label = UILabel()
         label.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
@@ -36,20 +34,27 @@ final class ViewController: UIViewController {
     }()
 
     private let animationView = AnimationView()
-    private let cameraSlider = UISlider()
 
-    /// Вертикальный слайдер elevation.
+    private let azimuthSlider: UISlider = {
+        let slider = UISlider()
+        slider.minimumValue = -Float.pi
+        slider.maximumValue = Float.pi
+        slider.value = 0
+        slider.minimumTrackTintColor = .systemBlue
+        slider.maximumTrackTintColor = .systemBlue
+        return slider
+    }()
+
     private let elevationSlider: UISlider = {
         let slider = UISlider()
         slider.minimumValue = -Float.pi / 2
         slider.maximumValue = Float.pi / 2
         slider.value = 0
-        slider.minimumTrackTintColor = .systemRed
-        slider.maximumTrackTintColor = .systemGreen
+        slider.minimumTrackTintColor = .systemBlue
+        slider.maximumTrackTintColor = .systemBlue
         return slider
     }()
 
-    /// Тайтл над слайдером освещения.
     private let lightTitleLabel: UILabel = {
         let label = UILabel()
         label.font = .systemFont(ofSize: 14, weight: .medium)
@@ -57,23 +62,26 @@ final class ViewController: UIViewController {
         return label
     }()
 
-    /// Слайдер интенсивности направленного света (в люксах).
     private let lightSlider: UISlider = {
         let slider = UISlider()
         slider.minimumValue = 0
         slider.maximumValue = 10000
         slider.value = 5000
-        slider.minimumTrackTintColor = .systemYellow
-        slider.maximumTrackTintColor = .systemGray4
+        slider.minimumTrackTintColor = .systemGray4
+        slider.maximumTrackTintColor = .systemYellow
         return slider
     }()
 
     private let loadButton: UIButton = {
         let button = UIButton(type: .system)
-        button.setTitle("Загрузить анимацию", for: .normal)
-        button.setTitleColor(.white, for: .normal)
-        button.backgroundColor = .systemBlue
-        button.layer.cornerRadius = 20
+        let config = UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)
+        button.setImage(
+            UIImage(systemName: "square.and.arrow.up", withConfiguration: config),
+            for: .normal
+        )
+        button.tintColor = .white
+        button.backgroundColor = .systemOrange
+        button.layer.cornerRadius = 12
         return button
     }()
 
@@ -83,7 +91,12 @@ final class ViewController: UIViewController {
         super.viewDidLoad()
         setupUI()
         bindViewModel()
+        bindAnimationView()
         startPlaying()
+
+        // Пока идёт предзагрузка — показываем целевое значение азимута из модели,
+        // чтобы не было скачка с 0.00π на актуальное после подгрузки.
+        updateAzimuthLabel(viewModel.model.azimuth)
     }
 
     // MARK: - Binding
@@ -98,6 +111,10 @@ final class ViewController: UIViewController {
     }
 
     private func bindAnimationView() {
+        animationView.onError = { [weak self] message in
+            self?.viewModel.onError?(message)
+        }
+
         animationView.onElevationRangeChanged = { [weak self] range, elevation in
             guard let self = self else { return }
             self.elevationSlider.minimumValue = range.lowerBound
@@ -112,12 +129,14 @@ final class ViewController: UIViewController {
     private func startPlaying() {
         let scene = viewModel.model
         guard !scene.name.isEmpty else {
-            print("⚠️ Имя сцены не задано.")
+            viewModel.onError?("Имя сцены не задано. Заполните `viewModel.model.name`.")
             return
         }
         animationView.preload(scenes: [scene]) { [weak self] in
             guard let self = self else { return }
-            self.animationView.play(scene: scene, loop: true)
+            self.animationView.play(scene: scene, loop: true) { [weak self] in
+                self?.syncAzimuthLabel()
+            }
         }
     }
 
@@ -139,13 +158,8 @@ final class ViewController: UIViewController {
     }
 
     private func handlePickedFile(_ url: URL) {
-        animationView.playExternal(from: url, loop: true) { [weak self] result in
-            switch result {
-            case .success:
-                print("✅ Успешная загрузка файла")
-            case .failure(let error):
-                self?.showError("Не удалось загрузить файл: \(error.localizedDescription)")
-            }
+        animationView.playExternal(from: url, loop: true) { [weak self] in
+            self?.syncAzimuthLabel()
         }
     }
 
@@ -154,12 +168,7 @@ final class ViewController: UIViewController {
     private func setupUI() {
         view.backgroundColor = .white
 
-        cameraSlider.minimumValue = -Float.pi
-        cameraSlider.maximumValue = Float.pi
-        cameraSlider.value = 0
-        cameraSlider.minimumTrackTintColor = .red
-        cameraSlider.maximumTrackTintColor = .green
-        cameraSlider.addTarget(self, action: #selector(cameraSliderChanged(_:)), for: .valueChanged)
+        azimuthSlider.addTarget(self, action: #selector(cameraSliderChanged(_:)), for: .valueChanged)
 
         elevationSlider.transform = CGAffineTransform(rotationAngle: -.pi / 2)
         elevationSlider.addTarget(self, action: #selector(elevationSliderChanged(_:)), for: .valueChanged)
@@ -172,19 +181,17 @@ final class ViewController: UIViewController {
         view.addSubview(azimuthLabel)
         view.addSubview(elevationLabel)
         view.addSubview(animationView)
-        view.addSubview(cameraSlider)
+        view.addSubview(azimuthSlider)
         view.addSubview(elevationSlider)
         view.addSubview(lightTitleLabel)
         view.addSubview(lightSlider)
         view.addSubview(loadButton)
 
-        bindAnimationView()
         setupConstraints()
     }
 
     // MARK: - Formatting
 
-    /// Форматирует значение в радианах как коэффициент при π: 0.50π, -0.25π, 1.00π.
     private func piString(_ radians: Float) -> String {
         let coefficient = radians / .pi
         return String(format: "%.2fπ", coefficient)
@@ -203,8 +210,25 @@ final class ViewController: UIViewController {
         lightTitleLabel.text = "Освещение: \(rounded) лк"
     }
 
+    /// Синхронизирует тайтл азимута с фактическим состоянием камеры.
+    /// Вызывается после загрузки сцены (бандловой или внешней).
+    private func syncAzimuthLabel() {
+        updateAzimuthLabel(animationView.effectiveAzimuth)
+    }
+
+    // MARK: - Error presentation
+
     private func showError(_ message: String) {
-        let alert = UIAlertController(title: "Ошибка", message: message, preferredStyle: .alert)
+        guard presentedViewController == nil else {
+            print("⚠️ Ошибка (алерт уже показан): \(message)")
+            return
+        }
+
+        let alert = UIAlertController(
+            title: "Ошибка",
+            message: message,
+            preferredStyle: .alert
+        )
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         present(alert, animated: true)
     }
@@ -213,7 +237,8 @@ final class ViewController: UIViewController {
 
     @objc private func cameraSliderChanged(_ sender: UISlider) {
         animationView.setCameraAzimuthOffset(sender.value)
-        updateAzimuthLabel(sender.value)
+        // Показываем фактический угол камеры, а не offset слайдера.
+        updateAzimuthLabel(animationView.effectiveAzimuth)
     }
 
     @objc private func elevationSliderChanged(_ sender: UISlider) {
@@ -240,7 +265,7 @@ extension ViewController: UIDocumentPickerDelegate {
     }
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-        // Пользователь закрыл пикер без выбора — ничего не делаем.
+        // Отмена — не ошибка.
     }
 }
 
@@ -252,7 +277,7 @@ private extension ViewController {
             azimuthLabel,
             elevationLabel,
             animationView,
-            cameraSlider,
+            azimuthSlider,
             elevationSlider,
             lightTitleLabel,
             lightSlider,
@@ -262,8 +287,7 @@ private extension ViewController {
         }
 
         NSLayoutConstraint.activate([
-            // Тайтлы друг под другом, прижаты к левому краю, над animationView.
-            azimuthLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 25),
+            azimuthLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
             azimuthLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10),
             azimuthLabel.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -10),
 
@@ -271,21 +295,21 @@ private extension ViewController {
             elevationLabel.leadingAnchor.constraint(equalTo: azimuthLabel.leadingAnchor),
             elevationLabel.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -10),
 
-            animationView.topAnchor.constraint(equalTo: elevationLabel.bottomAnchor, constant: 15),
+            animationView.topAnchor.constraint(equalTo: elevationLabel.bottomAnchor, constant: 8),
             animationView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10),
             animationView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -25),
             animationView.heightAnchor.constraint(equalTo: animationView.widthAnchor),
 
-            cameraSlider.topAnchor.constraint(equalTo: animationView.bottomAnchor, constant: 5),
-            cameraSlider.centerXAnchor.constraint(equalTo: animationView.centerXAnchor),
-            cameraSlider.widthAnchor.constraint(equalTo: animationView.widthAnchor),
+            azimuthSlider.topAnchor.constraint(equalTo: animationView.bottomAnchor, constant: 5),
+            azimuthSlider.centerXAnchor.constraint(equalTo: animationView.centerXAnchor),
+            azimuthSlider.widthAnchor.constraint(equalTo: animationView.widthAnchor),
 
             elevationSlider.centerXAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
             elevationSlider.centerYAnchor.constraint(equalTo: animationView.centerYAnchor),
             elevationSlider.widthAnchor.constraint(equalToConstant: 200),
             elevationSlider.heightAnchor.constraint(equalToConstant: 30),
 
-            lightTitleLabel.topAnchor.constraint(equalTo: cameraSlider.bottomAnchor, constant: 12),
+            lightTitleLabel.topAnchor.constraint(equalTo: azimuthSlider.bottomAnchor, constant: 12),
             lightTitleLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10),
             lightTitleLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
 
