@@ -27,7 +27,7 @@ final class AnimationView: UIView {
     private let cameraEntity = Entity()
     private let modelContainer = Entity()
 
-    private let floorEntity = ModelEntity()
+    //private let floorEntity = ModelEntity()
 
     private let keyLight: DirectionalLight = {
         let light = DirectionalLight()
@@ -119,9 +119,9 @@ final class AnimationView: UIView {
             roughness: 0.9,
             isMetallic: false
         )
-        floorEntity.model = ModelComponent(mesh: mesh, materials: [material])
-        floorEntity.isEnabled = false
-        sceneAnchor.addChild(floorEntity)
+        //floorEntity.model = ModelComponent(mesh: mesh, materials: [material])
+        //floorEntity.isEnabled = false
+        //sceneAnchor.addChild(floorEntity)
     }
 
     // MARK: - Reset
@@ -137,7 +137,7 @@ final class AnimationView: UIView {
         currentScaledFloorY = 0
         cameraAzimuthOffset = 0
         cameraElevationAbsolute = nil
-        floorEntity.isEnabled = false
+        //floorEntity.isEnabled = false
     }
 
     // MARK: - Preload
@@ -201,7 +201,7 @@ final class AnimationView: UIView {
         currentScaledRadius = radius
         currentScaledFloorY = bounds.min.y
 
-        let floorExtent = max(size.x, size.z) * 2.0
+        /*let floorExtent = max(size.x, size.z) * 2.0
         let floorThickness: Float = 0.02
         floorEntity.position = SIMD3<Float>(
             center.x,
@@ -209,7 +209,7 @@ final class AnimationView: UIView {
             center.z
         )
         floorEntity.scale = SIMD3<Float>(floorExtent, 1, floorExtent)
-        floorEntity.isEnabled = true
+        floorEntity.isEnabled = true*/
 
         currentModelRoot?.removeFromParent()
         modelContainer.addChild(model)
